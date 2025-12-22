@@ -1,18 +1,39 @@
-# Use Java 21 (matches your Spring Boot setup)
-FROM eclipse-temurin:21-jdk-jammy
+# =========================
+# Build stage
+# =========================
+FROM maven:3.9.9-eclipse-temurin-21 AS build
 
-# Set working directory
 WORKDIR /app
 
-# Copy jar
-ARG JAR_FILE=target/*.jar
-COPY ${JAR_FILE} app.jar
+# Copy pom.xml first (for dependency caching)
+COPY pom.xml .
+COPY .mvn .mvn
+COPY mvnw .
 
-# JVM tuning (important for Render)
+# Download dependencies
+RUN mvn dependency:go-offline
+
+# Copy source code
+COPY src src
+
+# Build jar
+RUN mvn clean package -DskipTests
+
+# =========================
+# Runtime stage
+# =========================
+FROM eclipse-temurin:21-jdk-jammy
+
+WORKDIR /app
+
+# JVM tuning for Render
 ENV JAVA_TOOL_OPTIONS="-Xms256m -Xmx512m -Djava.net.preferIPv4Stack=true"
 
-# Expose port (Render uses 8080)
+# Copy jar from build stage
+COPY --from=build /app/target/*.jar app.jar
+
+# Render uses port 8080
 EXPOSE 8080
 
-# Start app
+# Run app
 ENTRYPOINT ["java","-jar","app.jar"]
