@@ -5,6 +5,7 @@ import com.ejetcore.dto.UserDto;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.*;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.StringUtils;
@@ -40,6 +41,7 @@ public class AuthController {
     // ====================================
     // 2) GET /api/auth/me  (Protected)
     // ====================================
+    @PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/me")
     public ResponseEntity<?> getCurrentUser(Authentication authentication) {
 
