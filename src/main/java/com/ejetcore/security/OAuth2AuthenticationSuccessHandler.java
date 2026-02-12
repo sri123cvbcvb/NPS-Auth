@@ -171,7 +171,7 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
 // 4A) Create HttpOnly Cookie for JWT
         ResponseCookie jwtCookie = ResponseCookie.from("EJET_AUTH", tokenToUse)
                 .httpOnly(true)
-                .secure(false)     // 🔴 set true in production (HTTPS)
+                .secure(true)     // 🔴 set true in production (HTTPS)
                 .path("/")
                 .sameSite("Lax")
                 .maxAge(jwtTokenProvider.getJwtExpirationMs() / 1000)
@@ -188,7 +188,7 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
 
         ResponseCookie userCookie = ResponseCookie.from("EJET_USER", encodedUserInfo)
                 .httpOnly(false)   // ✅ React can read this
-                .secure(false)
+                .secure(true)
                 .path("/")
                 .sameSite("Lax")
                 .maxAge(jwtTokenProvider.getJwtExpirationMs() / 1000)
@@ -199,8 +199,10 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
         response.addHeader(HttpHeaders.SET_COOKIE, userCookie.toString());
 
 // 4D) Redirect to React app (NO token in URL)
-        response.sendRedirect("http://localhost:5173/auth/callback");
+        /*response.sendRedirect("http://localhost:5173/auth/callback");*/
 
+        //or
+        response.sendRedirect("/api/auth/me");
 // STOP execution — do NOT write JSON response
 
     }
