@@ -41,7 +41,7 @@ public class AuthController {
     // ====================================
     // 2) GET /api/auth/me  (Protected)
     // ====================================
-    @PreAuthorize("hasRole('ADMIN')")
+    //@PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/me")
     public ResponseEntity<?> getCurrentUser(Authentication authentication) {
 
@@ -72,58 +72,8 @@ public class AuthController {
     }
 
     // ====================================
-    // 3) POST /api/auth/logout  (Protected)
+    // 3) POST /api/auth/logout
     // ====================================
-    /*@PostMapping("/logout")
-    public ResponseEntity<?> logout(
-            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authHeader,
-            @CookieValue(value = "EJET_AUTH", required = false) String jwtCookie,
-            HttpServletResponse response
-    ) {
-
-        String token = null;
-
-        // 1) Try to get token from Authorization header (old behavior)
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            token = authHeader.substring(7); // remove "Bearer "
-        }
-
-        // 2) If no header, try JWT from cookie (new browser flow)
-        if (!StringUtils.hasText(token) && StringUtils.hasText(jwtCookie)) {
-            token = jwtCookie;
-        }
-
-        if (StringUtils.hasText(token)) {
-            // delete from Redis (our session store)
-            redisSessionService.deleteSession(token);
-        }
-
-        // Clear security context for current request
-        SecurityContextHolder.clearContext();
-
-        // 3) Remove JWT cookie
-        Cookie authCookie = new Cookie("EJET_AUTH", "");
-        authCookie.setPath("/");
-        authCookie.setHttpOnly(true);
-        authCookie.setSecure(false); // 🔴 set true in production with HTTPS
-        authCookie.setMaxAge(0);     // delete cookie
-        response.addCookie(authCookie);
-
-        // 4) Remove user info cookie
-        Cookie userCookie = new Cookie("EJET_USER", "");
-        userCookie.setPath("/");
-        userCookie.setHttpOnly(false);
-        userCookie.setSecure(false);
-        userCookie.setMaxAge(0);
-        response.addCookie(userCookie);
-
-        return ResponseEntity.ok(Map.of(
-                "success", true,
-                "message", "Logged out successfully"
-        ));
-    }*/
-
-
     @PostMapping("/logout")
     public ResponseEntity<?> logout(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authHeader,

@@ -5,15 +5,15 @@ import com.ejetcore.authenticationservice.GoogleTokenRepository;
 import com.ejetcore.authenticationservice.RedisSessionService;
 import com.ejetcore.authenticationservice.UserModel;
 import com.ejetcore.authenticationservice.UserRepository;
-import com.ejetcore.dto.AuthResponseDto;
-import com.ejetcore.dto.UserDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.http.MediaType;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
@@ -22,13 +22,11 @@ import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.ResponseCookie;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import jakarta.servlet.http.Cookie;
 
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Map;
@@ -43,7 +41,13 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
     private final RedisSessionService redisSessionService;
     private final OAuth2AuthorizedClientService authorizedClientService;
     private final TokenEncryptionUtil tokenEncryptionUtil;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /** Centralized UTC "now" */
+    private static LocalDateTime nowUtc() {
+        return LocalDateTime.ofInstant(Instant.now(), ZoneOffset.UTC);
+    }
 
     @Override
     public void onAuthenticationSuccess(
@@ -53,11 +57,16 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
     ) throws IOException, ServletException {
 
         if (!(authentication instanceof OAuth2AuthenticationToken oauthToken)) {
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
-                    "Unexpected authentication type: " + authentication.getClass().getName());
+            response.sendError(
+                    HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    "Unexpected authentication type: " + authentication.getClass().getName()
+            );
             return;
         }
 
+        // ==========================
+        // 1) Extract Google user info
+        // ==========================
         OAuth2User oauthUser = oauthToken.getPrincipal();
         Map<String, Object> attributes = oauthUser.getAttributes();
 
@@ -65,35 +74,39 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
         String email = (String) attributes.get("email");
         String name = (String) attributes.getOrDefault("name", "");
         String picture = (String) attributes.getOrDefault("picture", "");
-        Boolean emailVerified = (Boolean) attributes.getOrDefault("email_verified", Boolean.FALSE);
+        Boolean emailVerified =
+                (Boolean) attributes.getOrDefault("email_verified", Boolean.FALSE);
 
         if (StringUtils.isBlank(sub)) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Google 'sub' (user ID) is missing");
+            response.sendError(
+                    HttpServletResponse.SC_BAD_REQUEST,
+                    "Google 'sub' (user ID) is missing"
+            );
             return;
         }
 
         // ==========================
-        // 1) Save / update UserModel
+        // 2) Create / update User (UTC)
         // ==========================
         UserModel user = userRepository.findByGoogleSub(sub)
                 .orElseGet(() -> {
                     UserModel u = new UserModel();
                     u.setGoogleSub(sub);
                     u.setRole("ROLE_USER");
-                    u.setCreatedAt(LocalDateTime.now());
+                    u.setCreatedAt(nowUtc());
                     return u;
                 });
 
         user.setEmail(email);
         user.setName(name);
         user.setPictureUrl(picture);
-        user.setEmailVerified(emailVerified != null && emailVerified);
-        user.setUpdatedAt(LocalDateTime.now());
+        user.setEmailVerified(Boolean.TRUE.equals(emailVerified));
+        user.setUpdatedAt(nowUtc());
 
-        UserModel users = userRepository.save(user);
+        UserModel savedUser = userRepository.save(user);
 
         // ==========================
-        // 2) Save Google access token
+        // 3) Store Google access token (UTC)
         // ==========================
         OAuth2AuthorizedClient client =
                 authorizedClientService.loadAuthorizedClient(
@@ -104,106 +117,106 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
         if (client != null) {
             OAuth2AccessToken accessToken = client.getAccessToken();
             if (accessToken != null) {
-                String tokenValue = accessToken.getTokenValue();
-                LocalDateTime expiresAt = accessToken.getExpiresAt() != null
-                        ? LocalDateTime.ofInstant(accessToken.getExpiresAt(), ZoneOffset.UTC)
-                        : null;
 
-                GoogleTokenModel googleToken = googleTokenRepository.findByUser(user)
-                        .orElseGet(() -> {
-                            GoogleTokenModel t = new GoogleTokenModel();
-                            t.setUser(users);
-                            t.setCreatedAt(LocalDateTime.now());
-                            return t;
-                        });
+                String rawToken = accessToken.getTokenValue();
+
+                //  Google expiry is Instant (UTC by definition) → store explicitly in UTC
+                LocalDateTime accessExpiresAtUtc =
+                        accessToken.getExpiresAt() != null
+                                ? LocalDateTime.ofInstant(
+                                accessToken.getExpiresAt(),
+                                ZoneOffset.UTC
+                        )
+                                : null;
+
+                GoogleTokenModel googleToken =
+                        googleTokenRepository.findByUser(savedUser)
+                                .orElseGet(() -> {
+                                    GoogleTokenModel t = new GoogleTokenModel();
+                                    t.setUser(savedUser);
+                                    t.setCreatedAt(nowUtc());
+                                    return t;
+                                });
 
                 googleToken.setAccessTokenEncrypted(
-                        tokenEncryptionUtil.encrypt(tokenValue)
+                        tokenEncryptionUtil.encrypt(rawToken)
                 );
-
-                googleToken.setAccessExpiresAt(expiresAt);
-                googleToken.setUpdatedAt(LocalDateTime.now());
+                googleToken.setAccessExpiresAt(accessExpiresAtUtc);
+                googleToken.setUpdatedAt(nowUtc());
 
                 googleTokenRepository.save(googleToken);
             }
         }
 
         // ==========================
-// 3) Create / reuse JWT + store in Redis (avoid duplicate sessions)
-// ==========================
-        String role = user.getRole() != null ? user.getRole() : "ROLE_USER";
+        // 4) JWT + Redis session
+        // ==========================
+        String role =
+                savedUser.getRole() != null ? savedUser.getRole() : "ROLE_USER";
 
-// Try to reuse existing token from cookie (Option A)
-        String cookieToken = null;
+        String existingToken = null;
         if (request.getCookies() != null) {
             for (Cookie c : request.getCookies()) {
                 if ("EJET_AUTH".equals(c.getName())) {
-                    cookieToken = c.getValue();
+                    existingToken = c.getValue();
                     break;
                 }
             }
         }
 
-        String tokenToUse = null;
+        String jwtToUse = null;
 
-// If we found a cookie token and it is valid and points to same user in Redis — reuse it
-        if (StringUtils.isNotBlank(cookieToken) && jwtTokenProvider.validateToken(cookieToken)) {
-            Long redisUserId = redisSessionService.getUserIdFromSession(cookieToken);
-            if (redisUserId != null && redisUserId.equals(users.getId())) {
-                tokenToUse = cookieToken; // reuse
+        if (StringUtils.isNotBlank(existingToken)
+                && jwtTokenProvider.validateToken(existingToken)) {
+
+            Long redisUserId =
+                    redisSessionService.getUserIdFromSession(existingToken);
+
+            if (redisUserId != null && redisUserId.equals(savedUser.getId())) {
+                jwtToUse = existingToken; // reuse
             }
         }
 
-// Otherwise generate new token and store (Option B via RedisSessionService handles cleanup)
-        if (tokenToUse == null) {
-            tokenToUse = jwtTokenProvider.generateToken(users.getId(), users.getEmail(), role);
-            // storeSession will remove any previous token for this user (if exists)
-            redisSessionService.storeSession(tokenToUse, users.getId());
+        if (jwtToUse == null) {
+            jwtToUse = jwtTokenProvider.generateToken(
+                    savedUser.getId(),
+                    savedUser.getEmail(),
+                    role
+            );
+            redisSessionService.storeSession(jwtToUse, savedUser.getId());
         }
 
-
         // ==========================
-// 4) Set Cookies + Redirect to React
-// ==========================
-
-
-
-// 4A) Create HttpOnly Cookie for JWT
-        ResponseCookie jwtCookie = ResponseCookie.from("EJET_AUTH", tokenToUse)
+        // 5) Cookies + Redirect
+        // ==========================
+        ResponseCookie jwtCookie = ResponseCookie.from("EJET_AUTH", jwtToUse)
                 .httpOnly(true)
-                .secure(true)     // 🔴 set true in production (HTTPS)
+                .secure(true)     // HTTPS in prod
                 .path("/")
                 .sameSite("Lax")
                 .maxAge(jwtTokenProvider.getJwtExpirationMs() / 1000)
                 .build();
 
-// 4B) Create user info cookie (readable by React)
         String rawUserInfo =
-                users.getId() + "::" +
-                        (users.getEmail() != null ? users.getEmail() : "") + "::" +
-                        (users.getName() != null ? users.getName() : "") + "::" +
+                savedUser.getId() + "::" +
+                        (savedUser.getEmail() != null ? savedUser.getEmail() : "") + "::" +
+                        (savedUser.getName() != null ? savedUser.getName() : "") + "::" +
                         role;
 
-        String encodedUserInfo = URLEncoder.encode(rawUserInfo, StandardCharsets.UTF_8);
+        String encodedUserInfo =
+                URLEncoder.encode(rawUserInfo, StandardCharsets.UTF_8);
 
         ResponseCookie userCookie = ResponseCookie.from("EJET_USER", encodedUserInfo)
-                .httpOnly(false)   // ✅ React can read this
+                .httpOnly(false)
                 .secure(true)
                 .path("/")
                 .sameSite("Lax")
                 .maxAge(jwtTokenProvider.getJwtExpirationMs() / 1000)
                 .build();
 
-// 4C) Add cookies to response
         response.addHeader(HttpHeaders.SET_COOKIE, jwtCookie.toString());
         response.addHeader(HttpHeaders.SET_COOKIE, userCookie.toString());
 
-// 4D) Redirect to React app (NO token in URL)
-        /*response.sendRedirect("http://localhost:5173/auth/callback");*/
-
-        //or
         response.sendRedirect("/api/auth/me");
-// STOP execution — do NOT write JSON response
-
     }
 }

@@ -75,7 +75,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/public/**").permitAll()
                         .anyRequest().authenticated()
                 )
-                // 🔥 FIXED: Add the authorization request resolver here
+                //  FIXED: Add the authorization request resolver here
                 .oauth2Login(oauth2 -> oauth2
                         .authorizationEndpoint(a -> a
                                 .authorizationRequestResolver(

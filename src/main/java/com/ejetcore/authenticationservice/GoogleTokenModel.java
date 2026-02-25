@@ -16,7 +16,7 @@ public class GoogleTokenModel {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // ✅ Relation to your UserModel
+    // Relation to your UserModel
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false, unique = true)
     private UserModel user;

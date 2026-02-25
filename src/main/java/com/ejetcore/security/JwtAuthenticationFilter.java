@@ -41,7 +41,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             Long userIdFromToken = jwtTokenProvider.getUserIdFromToken(token);
 
-            // ✅ Check Redis but in a safe way
+            // Check Redis but in a safe way
             Long redisUserId = redisSessionService.getUserIdFromSession(token);
 
             if (redisUserId != null && redisUserId >= 0) {
